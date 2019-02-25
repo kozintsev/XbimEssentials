@@ -6,6 +6,7 @@ using Xbim.Common.Exceptions;
 using Xbim.Common.Step21;
 using Xbim.IO;
 using Xbim.IO.Esent;
+using Xbim.IO.LiteDb;
 using Xbim.IO.Memory;
 
 namespace Xbim.Ifc
@@ -341,6 +342,12 @@ namespace Xbim.Ifc
             return new MemoryModel(factory);
         }
 
-        
+        private LiteDbModel CreateLiteDbModel(XbimSchemaVersion schema, int codePageOverride)
+        {
+            var factory = GetFactory(schema);
+            return new LiteDbModel(factory);
+        }
+
+
     }
 }

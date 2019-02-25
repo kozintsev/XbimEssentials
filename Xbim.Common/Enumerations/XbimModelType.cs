@@ -6,6 +6,7 @@
     public enum XbimModelType: byte
     {
         EsentModel,
-        MemoryModel
+        MemoryModel,
+        LiteDb
     }
 }
