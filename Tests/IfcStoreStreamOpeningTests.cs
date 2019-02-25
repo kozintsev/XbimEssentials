@@ -29,6 +29,16 @@ namespace Xbim.Essentials.Tests
                 store.Close();
             }
 
+            //LiteDb, IFC
+            using (var ifc = File.Open(ifcPath, FileMode.Open))
+            {
+                using (var model = IfcStore.Open(ifc, StorageType.Ifc, XbimSchemaVersion.Ifc2X3, XbimModelType.LiteDb))
+                {
+                    Assert.AreEqual(instCount, model.Instances.Count);
+                    model.Close();
+                }
+            }
+
             //Esent, IFC
             using (var ifc = File.Open(ifcPath, FileMode.Open))
             {

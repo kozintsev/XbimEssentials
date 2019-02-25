@@ -1,8 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using System.Text;
 using LiteDB;
 using Xbim.Common;
 using Xbim.Common.Exceptions;
@@ -14,10 +13,13 @@ namespace Xbim.IO.LiteDb
         private string _databaseName;
         private readonly LiteDbModel _model;
         private LiteDatabase _instance;
+        private XbimDBAccess _accessMode;
+        private bool _caching;
 
         private readonly IEntityFactory _factory;
 
         protected ConcurrentDictionary<int, IPersistEntity> ModifiedEntities = new ConcurrentDictionary<int, IPersistEntity>();
+        private BlockingCollection<StepForwardReference> _forwardReferences = new BlockingCollection<StepForwardReference>();
 
         public PersistedEntityInstanceCache(LiteDbModel model, IEntityFactory factory)
         {
@@ -107,6 +109,129 @@ namespace Xbim.IO.LiteDb
             //}
             //else
             ModifiedEntities.TryAdd(entity.EntityLabel, entity as IInstantiableEntity);
+        }
+
+        /// <summary>
+        /// Imports the contents of the ifc file into the named database, the resulting database is closed after success, use LoadStep21 to access
+        /// </summary>
+        /// <param name="toImportIfcFilename"></param>
+        /// <param name="progressHandler"></param>
+        /// <param name="xbimDbName"></param>
+        /// <param name="keepOpen"></param>
+        /// <param name="cacheEntities"></param>
+        /// <param name="codePageOverride"></param>
+        /// <returns></returns>
+        public void ImportStep(string xbimDbName, string toImportIfcFilename, ReportProgressDelegate progressHandler = null, bool keepOpen = false, bool cacheEntities = false, int codePageOverride = -1)
+        {
+            using (var reader = new FileStream(toImportIfcFilename, System.IO.FileMode.Open, FileAccess.Read))
+            {
+                ImportStep(xbimDbName, reader, reader.Length, progressHandler, keepOpen, cacheEntities, codePageOverride);
+            }
+        }
+
+        internal bool IsCaching
+        {
+            get
+            {
+                return _caching;
+            }
+        }
+
+        private readonly ConcurrentDictionary<int, IPersistEntity> _read = new ConcurrentDictionary<int, IPersistEntity>();
+
+        /// <summary>
+        /// Looks for this instance in the cache and returns it, if not found it creates a new instance and adds it to the cache
+        /// </summary>
+        /// <param name="label">Entity label to create</param>
+        /// <param name="type">If not null creates an instance of this type, else creates an unknown Ifc Type</param>
+        /// <param name="properties">if not null populates all properties of the instance</param>
+        /// <returns></returns>
+        public IPersistEntity GetOrCreateInstanceFromCache(int label, Type type, byte[] properties)
+        {
+            Debug.Assert(_caching); //must be caching to call this
+
+            IPersistEntity entity;
+            if (_read.TryGetValue(label, out entity)) return entity;
+
+            if (type.IsAbstract)
+            {
+                //Model.Logger.LogError("Illegal Entity in the model #{0}, Type {1} is defined as Abstract and cannot be created", label, type.Name);
+                return null;
+            }
+
+            return _read.GetOrAdd(label, l =>
+            {
+                var instance = _factory.New(_model, type, label, true);
+                //instance.ReadEntityProperties(this, new BinaryReader(new MemoryStream(properties)), false, true);
+                return instance;
+            }); //might have been done by another
+        }
+
+        internal void ImportStep(string xbimDbName, Stream stream, long streamSize, ReportProgressDelegate progressHandler = null, bool keepOpen = false, bool cacheEntities = false, int codePageOverride = -1)
+        {
+            //CreateDatabase(xbimDbName);
+            Open(xbimDbName, XbimDBAccess.Exclusive);
+            //var table = GetEntityTable();
+            if (cacheEntities) CacheStart();
+            try
+            {
+
+                _forwardReferences = new BlockingCollection<StepForwardReference>();
+                using (var part21Parser = new P21ToIndexParser(stream, streamSize, this, codePageOverride))
+                {
+                    if (progressHandler != null) part21Parser.ProgressStatus += progressHandler;
+                    part21Parser.Parse();
+                    _model.Header = part21Parser.Header;
+                    if (progressHandler != null) part21Parser.ProgressStatus -= progressHandler;
+                }
+
+                using (var transaction = table.BeginLazyTransaction())
+                {
+                    table.WriteHeader(_model.Header);
+                    transaction.Commit();
+                }
+                FreeTable(table);
+                if (!keepOpen) Close();
+            }
+            catch (Exception)
+            {
+                FreeTable(table);
+                Close();
+                File.Delete(xbimDbName);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Starts a read cache
+        /// </summary>
+        internal void CacheStart()
+        {
+            _caching = true;
+        }
+
+        internal void Open(string filename, XbimDBAccess accessMode = XbimDBAccess.Read)
+        {
+            _databaseName = Path.GetFullPath(filename); //success store the name of the DB file
+            _accessMode = accessMode;
+            _caching = false;
+            var entTable = GetEntityTable();
+            try
+            {
+                using (entTable.BeginReadOnlyTransaction())
+                {
+                    _model.InitialiseHeader(entTable.ReadHeader());
+                }
+            }
+            catch (Exception e)
+            {
+                Close();
+                throw new XbimException("Failed to open " + filename, e);
+            }
+            finally
+            {
+                FreeTable(entTable);
+            }
         }
 
         public void Dispose()

@@ -12,17 +12,6 @@ namespace Xbim.Essentials.Tests
     public class BasicModelTests
     {
         [TestMethod]
-        public void OpenIfcFileBig()
-        {
-            using (var models = new ModelFactory(@"c:\Users\okozi\YandexDisk\Bim\Big.ifc"))
-            {
-                models.Do(m =>
-                    Assert.IsTrue(m.Instances.Count > 0)
-                );
-            }
-        }
-
-        [TestMethod]
         public void OpenIfcFile()
         {
             using (var models = new ModelFactory("4walls1floorSite.ifc"))

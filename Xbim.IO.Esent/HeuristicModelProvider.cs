@@ -212,6 +212,10 @@ namespace Xbim.Ifc
                         else
                             throw new XbimException("Failed to create Esent model");
                     }
+                    if (modelType == XbimModelType.LiteDb)
+                    {
+                        var model = CreateLiteDbModel(schema, codePageOverride);
+                    }
                     if (modelType == XbimModelType.MemoryModel)
                     {
                         var model = CreateMemoryModel(schema);

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using Xbim.Common;
 using Xbim.Common.Exceptions;
@@ -16,7 +17,22 @@ namespace Xbim.IO.LiteDb
         public IEntityFactory Factory => _factory;
         private bool _disposed;
 
+        private int _codePageOverrideForStepFiles = -1;
+
         //private XbimInstanceCollection InstancesLocal { get; set; }
+
+        /// <summary>
+        /// Some applications do not comply with the standard and used the Windows code page for text. This property gives the possibility to override the character encoding when reading ifc.
+        /// default value = -1 - by standard http://www.buildingsmart-tech.org/implementation/get-started/string-encoding/string-encoding-decoding-summary
+        /// </summary>
+        /// <example>
+        /// model.CodePageOverride = Encoding.Default.WindowsCodePage;
+        /// </example>
+        public int CodePageOverride
+        {
+            get { return _codePageOverrideForStepFiles; }
+            set { _codePageOverrideForStepFiles = value; }
+        }
 
         protected PersistedEntityInstanceCache InstanceCache;
         internal PersistedEntityInstanceCache Cache
@@ -82,12 +98,67 @@ namespace Xbim.IO.LiteDb
             
         }
 
+        public virtual bool CreateFrom(Stream inputStream, long streamSize, StorageType streamType, string xbimDbName, ReportProgressDelegate progDelegate = null, bool keepOpen = false, bool cacheEntities = false)
+        {
+            Close();
+
+            if (streamType.HasFlag(StorageType.Ifc) ||
+                streamType.HasFlag(StorageType.Stp))
+            {
+                Cache.ImportStep(xbimDbName, inputStream, streamSize, progDelegate, keepOpen, cacheEntities, _codePageOverrideForStepFiles);
+            }
+
+            return true;
+        }
+
+        private IStepFileHeader _header;
+        public IStepFileHeader Header
+        {
+            get { return _header; }
+            set
+            {
+                _header = value;
+                if (value == null) return;
+
+                if (CurrentTransaction != null)
+                {
+                    //var cursor = GetTransactingCursor();
+                    //cursor.WriteHeader(_header);
+                }
+                else
+                {
+                    //using (var txn = BeginTransaction("New header"))
+                    //{
+                    //    var cursor = GetTransactingCursor();
+                    //    cursor.WriteHeader(_header);
+                    //    txn.Commit();
+                    //}
+                }
+                _header.PropertyChanged += (sender, args) =>
+                {
+                    //if (CurrentTransaction != null)
+                    //{
+                    //    var cursor = GetTransactingCursor();
+                    //    cursor.WriteHeader(_header);
+                    //}
+                    //else
+                    //{
+                    //    using (var txn = BeginTransaction("Header changed"))
+                    //    {
+                    //        var cursor = GetTransactingCursor();
+                    //        cursor.WriteHeader(_header);
+                    //        txn.Commit();
+                    //    }
+                    //}
+                };
+            }
+        }
+
         public ILogger Logger { get; set; }
         public int UserDefinedId { get; set; }
         public object Tag { get; set; }
         public IGeometryStore GeometryStore { get; }
-        public IStepFileHeader Header { get; }
-        public bool IsTransactional { get; }
+        public bool IsTransactional { get; set; }
         public IList<XbimInstanceHandle> InstanceHandles { get; }
         public IEntityCollection Instances { get; }
         public bool Activate(IPersistEntity entity)
