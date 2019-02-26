@@ -1,9 +1,15 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
+using Xbim.Common;
+using Xbim.Common.Step21;
 using Xbim.IO.Parser;
+using Xbim.IO.Step21;
+using Xbim.IO.Step21.Parser;
 
 namespace Xbim.IO.LiteDb
 {
@@ -32,11 +38,25 @@ namespace Xbim.IO.LiteDb
 
     public class P21ToIndexParser : P21Parser, IDisposable
     {
+        public event ReportProgressDelegate ProgressStatus;
+        private int _percentageParsed;
+        private int _currentLabel;
         private readonly PersistedEntityInstanceCache _modelCache;
         const int TransactionBatchSize = 100;
         private int _entityCount = 0;
-        private readonly int _codePageOverride = -1;
+        private readonly int _codePageOverride;
         private readonly long _streamSize = -1;
+        private int _listNestLevel = -1;
+
+        private readonly List<int> _nestedIndex = new List<int>();
+        public int[] NestedIndex => _listNestLevel > 0 ? _nestedIndex.ToArray() : null;
+
+        private Part21Entity _currentInstance;
+        private readonly Stack<Part21Entity> _processStack = new Stack<Part21Entity>();
+        private readonly List<int> _indexKeyValues = new List<int>();
+        private string _currentType;
+        private IList<int> _indexKeys = null;
+        private PropertyValue _propertyValue;
 
         Task _cacheProcessor;
         Task _storeProcessor;
@@ -45,6 +65,7 @@ namespace Xbim.IO.LiteDb
 
         private BlockingCollection<Tuple<int, short, List<int>, byte[], bool>> _toStore;
         private BlockingCollection<Tuple<int, Type, byte[]>> _toProcess;
+        private readonly StepFileHeader _header = new StepFileHeader(StepFileHeader.HeaderCreationMode.LeaveEmpty, new LiteDbModel());
 
         internal P21ToIndexParser(Stream inputP21, long streamSize, PersistedEntityInstanceCache cache, int codePageOverride = -1)
             : base(inputP21)
@@ -56,9 +77,11 @@ namespace Xbim.IO.LiteDb
             _codePageOverride = codePageOverride;
         }
 
+        public StepFileHeader Header => _header;
+
         protected override void CharacterError()
         {
-            throw new NotImplementedException();
+            Debug.WriteLine("TODO");
         }
 
         protected override void BeginParse()
@@ -127,132 +150,349 @@ namespace Xbim.IO.LiteDb
 
         protected override void EndParse()
         {
-            throw new NotImplementedException();
+            _toStore.CompleteAdding();
+            _storeProcessor.Wait();
+            if (_modelCache.IsCaching)
+            {
+                _toProcess.CompleteAdding();
+                _cacheProcessor.Wait();
+                _cacheProcessor.Dispose();
+                _cacheProcessor = null;
+                //while (_modelCache.ForwardReferences.Count > 0)
+                //{
+                //    if (_modelCache.ForwardReferences.TryTake(out StepForwardReference forwardRef))
+                //        forwardRef.Resolve(_modelCache.Read, _modelCache.Model.Metadata);
+                //}
+            }
+            _storeProcessor.Dispose();
+            _storeProcessor = null;
+            Dispose();
         }
 
         protected override void BeginHeader()
         {
-            throw new NotImplementedException();
+            // Debug.WriteLine("TODO");
         }
 
         protected override void EndHeader()
         {
-            throw new NotImplementedException();
+            // _header.Write(_binaryWriter);
         }
 
         protected override void BeginScope()
         {
-            throw new NotImplementedException();
+            // Debug.WriteLine("TODO");
         }
 
         protected override void EndScope()
         {
-            throw new NotImplementedException();
+            // Debug.WriteLine("TODO");
         }
 
         protected override void EndSec()
         {
-            throw new NotImplementedException();
+            // Debug.WriteLine("TODO");
         }
 
         protected override void BeginList()
         {
-            throw new NotImplementedException();
+            //var p21 = _processStack.Peek();
+            //if (p21.CurrentParamIndex == -1)
+            //    p21.CurrentParamIndex++; //first time in take the first argument
+            //_listNestLevel++;
+            //if (!InHeader)
+            //    _binaryWriter.Write((byte)P21ParseAction.BeginList);
+
+            //if (_listNestLevel < 2) return;
+
+            //if (_listNestLevel - 1 > _nestedIndex.Count)
+            //    _nestedIndex.Add(0);
+            //else
+            //    _nestedIndex[_listNestLevel - 2]++;
         }
 
         protected override void EndList()
         {
-            throw new NotImplementedException();
+            //_listNestLevel--;
+            //if (_listNestLevel == 0)
+            //    _currentInstance.CurrentParamIndex++;
+
+            //if (!InHeader)
+            //    _binaryWriter.Write((byte)P21ParseAction.EndList);
+
+            ////we are finished with the list
+            //if (_listNestLevel <= 0) _nestedIndex.Clear();
         }
 
         protected override void BeginComplex()
         {
-            throw new NotImplementedException();
+            _binaryWriter.Write((byte)P21ParseAction.BeginComplex);
         }
 
         protected override void EndComplex()
         {
-            throw new NotImplementedException();
+            _binaryWriter.Write((byte)P21ParseAction.EndComplex);
         }
 
         protected override void SetType(string entityTypeName)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                IPersist currentHeaderEntity;
+                switch (entityTypeName)
+                {
+                    case "FILE_DESCRIPTION":
+                        currentHeaderEntity = _header.FileDescription;
+                        break;
+                    case "FILE_NAME":
+                        currentHeaderEntity = _header.FileName;
+                        break;
+                    case "FILE_SCHEMA":
+                        currentHeaderEntity = _header.FileSchema;
+                        break;
+                    default:
+                        throw new ArgumentException(string.Format("Invalid Header entity type {0}", entityTypeName));
+                }
+                _currentInstance = new Part21Entity(currentHeaderEntity);
+                _processStack.Push(_currentInstance);
+            }
+            else
+            {
+
+                _currentType = entityTypeName;
+                var type = _modelCache.Model.Metadata.ExpressType(_currentType);
+                if (type == null)
+                    throw new ArgumentException(string.Format("Invalid entity type {0}", _currentType));
+                _indexKeys = type.IndexedValues;
+            }
         }
 
         protected override void NewEntity(string entityLabel)
         {
-            throw new NotImplementedException();
+            _currentInstance = new Part21Entity(entityLabel);
+            _processStack.Push(_currentInstance);
+            _entityCount++;
+            _indexKeyValues.Clear();
+            _currentLabel = Convert.ToInt32(entityLabel.TrimStart('#'));
+            var data = _binaryWriter.BaseStream as MemoryStream;
+            if (data != null) data.SetLength(0);
+
+
+            if (_streamSize == -1 || ProgressStatus == null)
+                return;
+
+            var sc = (Scanner)Scanner;
+            double pos = sc.Buffer.Pos;
+            var newPercentage = Convert.ToInt32(pos / _streamSize * 100.0);
+            if (newPercentage <= _percentageParsed)
+                return;
+
+            _percentageParsed = newPercentage;
+            ProgressStatus(_percentageParsed, "Parsing");
         }
 
         protected override void EndEntity()
         {
-            throw new NotImplementedException();
+            var p21 = _processStack.Pop();
+            Debug.Assert(_processStack.Count == 0);
+            _currentInstance = null;
+            if (_currentType == null) return;
+            _binaryWriter.Write((byte)P21ParseAction.EndEntity);
+            var type = _modelCache.Model.Metadata.ExpressType(_currentType);
+            var data = _binaryWriter.BaseStream as MemoryStream;
+            if (data == null) return;
+            var bytes = data.ToArray();
+            var keys = new List<int>(_indexKeyValues);
+            _toStore.Add(new Tuple<int, short, List<int>, byte[], bool>(_currentLabel, type.TypeId, keys, bytes, type.IndexedClass));
+            if (this._modelCache.IsCaching) _toProcess.Add(new Tuple<int, Type, byte[]>(_currentLabel, type.Type, bytes));
         }
 
         protected override void EndHeaderEntity()
         {
-            throw new NotImplementedException();
+            _processStack.Pop();
+            _currentInstance = null;
         }
 
         protected override void SetIntegerValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.Integer);
+                _currentInstance.Entity?.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetIntegerValue);
+                _binaryWriter.Write(Convert.ToInt64(value));
+            }
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetHexValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.HexaDecimal);
+                _currentInstance.Entity?.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetHexValue);
+                var data = value.Substring(1, value.Length - 2);
+                if (string.IsNullOrWhiteSpace(data))
+                {
+                    _binaryWriter.Write((int)0);
+                }
+                else
+                {
+                    //decode data into byte array and write it
+                    var hex = data.Substring(1);
+                    int numChars = hex.Length;
+                    byte[] bytes = new byte[numChars / 2];
+                    for (int i = 0; i < numChars; i += 2)
+                        bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
+
+                    _binaryWriter.Write(bytes.Length);
+                    _binaryWriter.Write(bytes);
+                }
+            }
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetFloatValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.Real);
+                _currentInstance.Entity?.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetFloatValue);
+                _binaryWriter.Write(Convert.ToDouble(value, CultureInfo.InvariantCulture));
+            }
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetStringValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.String);
+                if (_currentInstance.Entity != null)
+                    _currentInstance.Entity.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetStringValue);
+                var ret = value.Substring(1, value.Length - 2); //remove the quotes
+                if (ret.Contains("\\") || ret.Contains("'")) //"''" added to remove extra ' added in IfcText Escape() method
+                {
+                    var d = new XbimP21StringDecoder();
+                    ret = d.Unescape(ret, _codePageOverride);
+                }
+                _binaryWriter.Write(ret);
+            }
+            if (_listNestLevel == 0)
+                _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetEnumValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.Enum);
+                _currentInstance.Entity?.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetEnumValue);
+                _binaryWriter.Write(value.Trim('.'));
+            }
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetBooleanValue(string value)
         {
-            throw new NotImplementedException();
+            if (InHeader)
+            {
+                _propertyValue.Init(value, StepParserType.Boolean);
+                _currentInstance.Entity?.Parse(_currentInstance.CurrentParamIndex, _propertyValue, NestedIndex);
+            }
+            else
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetBooleanValue);
+                _binaryWriter.Write(value == ".T.");
+            }
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void SetNonDefinedValue()
         {
-            throw new NotImplementedException();
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
+            _binaryWriter.Write((byte)P21ParseAction.SetNonDefinedValue);
         }
 
         protected override void SetOverrideValue()
         {
-            throw new NotImplementedException();
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
+            _binaryWriter.Write((byte)P21ParseAction.SetOverrideValue);
         }
 
         protected override void SetObjectValue(string value)
         {
-            throw new NotImplementedException();
+            var val = Convert.ToInt32(value.TrimStart('#'));
+
+            if (_indexKeys != null && _indexKeys.Contains(_currentInstance.CurrentParamIndex + 1)) //current param index is 0 based and ifcKey is 1 based
+                _indexKeyValues.Add(val);
+
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
+
+            if (val <= Int16.MaxValue)
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetObjectValueUInt16);
+                _binaryWriter.Write(Convert.ToUInt16(val));
+            }
+            else if (val <= Int32.MaxValue)
+            {
+                _binaryWriter.Write((byte)P21ParseAction.SetObjectValueInt32);
+                _binaryWriter.Write(Convert.ToInt32(val));
+            }
+            //else if (val <= Int64.MaxValue)
+            //{
+            //    throw new Exception("Entity Label exceeds maximim value for a long number, it is greater than an int32");
+            //    //_binaryWriter.Write((byte)P21ParseAction.SetObjectValueInt64);
+            //    //_binaryWriter.Write(val);
+            //}
+            else
+                throw new Exception("Entity Label exceeds maximim value for a long number, it is greater than an int32");
         }
 
         protected override void EndNestedType(string value)
         {
-            throw new NotImplementedException();
+            _binaryWriter.Write((byte)P21ParseAction.EndNestedType);
+            if (_listNestLevel == 0) _currentInstance.CurrentParamIndex++;
         }
 
         protected override void BeginNestedType(string value)
         {
-            throw new NotImplementedException();
+            _binaryWriter.Write((byte)P21ParseAction.BeginNestedType);
+            _binaryWriter.Write(value);
         }
+
+        #region IDisposable Members
 
         public void Dispose()
         {
-            throw new NotImplementedException();
+            _binaryWriter?.Close();
+            _binaryWriter = null;
         }
+
+        #endregion
     }
 }

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Xbim.Common;
 using Xbim.Common.Exceptions;
@@ -16,8 +17,11 @@ namespace Xbim.IO.LiteDb
         private IEntityFactory _factory;
         public IEntityFactory Factory => _factory;
         private bool _disposed;
+        private bool _deleteOnClose;
 
         private int _codePageOverrideForStepFiles = -1;
+
+        private readonly ReferencedModelCollection _referencedModels = new ReferencedModelCollection();
 
         //private XbimInstanceCollection InstancesLocal { get; set; }
 
@@ -38,6 +42,20 @@ namespace Xbim.IO.LiteDb
         internal PersistedEntityInstanceCache Cache
         {
             get { return InstanceCache; }
+        }
+
+        /// <summary>
+        /// Only inherited models can call parameter-less constructor and it is their responsibility to 
+        /// call Init() as the very first thing.
+        /// </summary>
+        internal LiteDbModel()
+        {
+            Logger = XbimLogging.CreateLogger<LiteDbModel>();
+        }
+
+        internal void InitialiseHeader(IStepFileHeader header)
+        {
+            _header = header;
         }
 
         public LiteDbModel(IEntityFactory factory)
@@ -90,15 +108,60 @@ namespace Xbim.IO.LiteDb
             _disposed = true;
         }
 
+        public string DatabaseName => InstanceCache.DatabaseName;
+
         /// <summary>
         /// Closes the current model and releases all resources and instances
         /// </summary>
         public virtual void Close()
         {
-            
+            var dbName = DatabaseName;
+            ModelFactors = new XbimModelFactors(Math.PI / 180, 1e-3, 1e-5);
+            Header = null;
+
+            //if (_editTransactionEntityCursor != null)
+            //    EndTransaction();
+            //if (_geometryStore != null)
+            //{
+            //    _geometryStore.Dispose();
+            //    _geometryStore = null;
+            //}
+            InstanceCache.Close();
+
+            //dispose any referenced models
+            foreach (var r in _referencedModels)
+            {
+                var model = r.Model;
+                IDisposable refModel = model;
+                refModel?.Dispose();
+            }
+
+            _referencedModels.Clear();
+
+            try //try and tidy up if required
+            {
+                if (_deleteOnClose && File.Exists(dbName))
+                {
+                    File.Delete(dbName);
+                    // Since Windows 10 Anniverary Edition JET FlushMap files are created for each XBIM
+                    // https://docs.microsoft.com/en-us/windows/desktop/extensiblestorageengine/gg294069(v%3Dexchg.10)#flush-map-files
+                    var flushMapFile = Path.ChangeExtension(dbName, ".jfm");
+                    if (File.Exists(flushMapFile))
+                    {
+                        File.Delete(flushMapFile);
+                    }
+
+                }
+            }
+            catch (Exception)
+            {
+                // ignored
+            }
+            _deleteOnClose = false;
         }
 
-        public virtual bool CreateFrom(Stream inputStream, long streamSize, StorageType streamType, string xbimDbName, ReportProgressDelegate progDelegate = null, bool keepOpen = false, bool cacheEntities = false)
+        public virtual bool CreateFrom(Stream inputStream, long streamSize, StorageType streamType, string xbimDbName, 
+            ReportProgressDelegate progDelegate = null, bool keepOpen = false, bool cacheEntities = false, bool deleteOnClose = false)
         {
             Close();
 
@@ -108,6 +171,7 @@ namespace Xbim.IO.LiteDb
                 Cache.ImportStep(xbimDbName, inputStream, streamSize, progDelegate, keepOpen, cacheEntities, _codePageOverrideForStepFiles);
             }
 
+            _deleteOnClose = deleteOnClose;
             return true;
         }
 

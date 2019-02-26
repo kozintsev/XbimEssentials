@@ -215,6 +215,9 @@ namespace Xbim.Ifc
                     if (modelType == XbimModelType.LiteDb)
                     {
                         var model = CreateLiteDbModel(schema, codePageOverride);
+                        if (model.CreateFrom(stream, stream.Length, dataType, xbimFilePath, progDelegate, true, true))
+                            return model;
+                        throw new XbimException("Failed to create LiteDb Model");
                     }
                     if (modelType == XbimModelType.MemoryModel)
                     {

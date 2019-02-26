@@ -11,10 +11,10 @@ namespace Xbim.IO.LiteDb
     public class PersistedEntityInstanceCache : IDisposable
     {
         private string _databaseName;
-        private readonly LiteDbModel _model;
         private LiteDatabase _instance;
         private XbimDBAccess _accessMode;
         private bool _caching;
+        private readonly LiteDbModel _model;
 
         private readonly IEntityFactory _factory;
 
@@ -30,6 +30,8 @@ namespace Xbim.IO.LiteDb
             //_entityTables = new EsentEntityCursor[MaxCachedEntityTables];
             //_geometryTables = new EsentCursor[MaxCachedGeometryTables];
         }
+
+        public LiteDbModel Model => _model;
 
         private LiteDatabase CreateInstance(string instanceName, bool recovery = false, bool createTemporaryTables = false)
         {
@@ -185,21 +187,51 @@ namespace Xbim.IO.LiteDb
                     if (progressHandler != null) part21Parser.ProgressStatus -= progressHandler;
                 }
 
-                using (var transaction = table.BeginLazyTransaction())
-                {
-                    table.WriteHeader(_model.Header);
-                    transaction.Commit();
-                }
-                FreeTable(table);
+                //using (var transaction = table.BeginLazyTransaction())
+                //{
+                //    table.WriteHeader(_model.Header);
+                //    transaction.Commit();
+                //}
+                //FreeTable(table);
                 if (!keepOpen) Close();
             }
             catch (Exception)
             {
-                FreeTable(table);
+                //FreeTable(table);
                 Close();
                 File.Delete(xbimDbName);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Clears all contents from the cache and closes any connections
+        /// </summary>
+        public void Close()
+        {
+            // contributed by @Sense545
+            //int refCount;
+            //lock (OpenInstances)
+            //{
+            //    refCount = OpenInstances.Count(c => c.JetInstance == JetInstance);
+            //}
+            //var disposeTable = (refCount != 0); //only dispose if we have not terminated the instance
+            //CleanTableArrays(disposeTable);
+            //EndCaching();
+
+            //if (_session == null)
+            //    return;
+            //Api.JetCloseDatabase(_session, _databaseId, CloseDatabaseGrbit.None);
+            //lock (OpenInstances)
+            //{
+            //    OpenInstances.Remove(this);
+            //    refCount = OpenInstances.Count(c => string.Compare(c.DatabaseName, DatabaseName, StringComparison.OrdinalIgnoreCase) == 0);
+            //    if (refCount == 0) //only detach if we have no more references
+            //        Api.JetDetachDatabase(_session, _databaseName);
+            //}
+            _databaseName = null;
+            //_session.Dispose();
+            //_session = null;
         }
 
         /// <summary>
@@ -210,18 +242,24 @@ namespace Xbim.IO.LiteDb
             _caching = true;
         }
 
+        internal string DatabaseName
+        {
+            get => _databaseName;
+            set => _databaseName = value;
+        }
+
         internal void Open(string filename, XbimDBAccess accessMode = XbimDBAccess.Read)
         {
             _databaseName = Path.GetFullPath(filename); //success store the name of the DB file
             _accessMode = accessMode;
             _caching = false;
-            var entTable = GetEntityTable();
+            //var entTable = GetEntityTable();
             try
             {
-                using (entTable.BeginReadOnlyTransaction())
-                {
-                    _model.InitialiseHeader(entTable.ReadHeader());
-                }
+                //using (entTable.BeginReadOnlyTransaction())
+                //{
+                //    _model.InitialiseHeader(entTable.ReadHeader());
+                //}
             }
             catch (Exception e)
             {
@@ -230,7 +268,7 @@ namespace Xbim.IO.LiteDb
             }
             finally
             {
-                FreeTable(entTable);
+                //FreeTable(entTable);
             }
         }
 
