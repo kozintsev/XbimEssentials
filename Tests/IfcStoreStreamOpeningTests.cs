@@ -11,6 +11,29 @@ namespace Xbim.Essentials.Tests
     {
         [TestMethod]
         [DeploymentItem("TestFiles")]
+        public void OpenLiteDbTest()
+        {
+            const string ifcPath = "4walls1floorSite.ifc";
+            var instCount = 0L;
+            //create file types
+            using (var store = IfcStore.Open(ifcPath))
+            {
+                instCount = store.Instances.Count;
+                store.Close();
+            }
+            //LiteDb, IFC
+            using (var ifc = File.Open(ifcPath, FileMode.Open))
+            {
+                using (var model = IfcStore.Open(ifc, StorageType.Ifc, XbimSchemaVersion.Ifc2X3, XbimModelType.LiteDb))
+                {
+                    Assert.AreEqual(instCount, model.Instances.Count);
+                    model.Close();
+                }
+            }
+        }
+
+        [TestMethod]
+        [DeploymentItem("TestFiles")]
         public void OpenStreamTest()
         {
             const string ifcPath = "4walls1floorSite.ifc";
@@ -28,16 +51,6 @@ namespace Xbim.Essentials.Tests
                 store.SaveAs(xbimPath);
                 store.Close();
             }
-
-            ////LiteDb, IFC
-            //using (var ifc = File.Open(ifcPath, FileMode.Open))
-            //{
-            //    using (var model = IfcStore.Open(ifc, StorageType.Ifc, XbimSchemaVersion.Ifc2X3, XbimModelType.LiteDb))
-            //    {
-            //        Assert.AreEqual(instCount, model.Instances.Count);
-            //        model.Close();
-            //    }
-            //}
 
             //Esent, IFC
             using (var ifc = File.Open(ifcPath, FileMode.Open))
