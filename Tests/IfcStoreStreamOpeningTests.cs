@@ -3,6 +3,8 @@ using Xbim.Ifc;
 using System.IO;
 using Xbim.IO;
 using Xbim.Common.Step21;
+using Xbim.Ifc2x3.ProductExtension;
+using Xbim.Ifc4.SharedBldgElements;
 
 namespace Xbim.Essentials.Tests
 {
@@ -14,7 +16,7 @@ namespace Xbim.Essentials.Tests
         public void OpenLiteDbTest()
         {
             const string ifcPath = "4walls1floorSite.ifc";
-            var instCount = 0L;
+            long instCount;
             //create file types
             using (var store = IfcStore.Open(ifcPath))
             {

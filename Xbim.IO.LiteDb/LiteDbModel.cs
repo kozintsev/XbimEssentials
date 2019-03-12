@@ -44,6 +44,29 @@ namespace Xbim.IO.LiteDb
             get { return InstanceCache; }
         }
 
+        private WeakReference _cacheReference;
+        internal InverseCache _inverseCache
+        {
+            get
+            {
+                if (_cacheReference == null || !_cacheReference.IsAlive)
+                    return null;
+                return _cacheReference.Target as InverseCache;
+            }
+            set
+            {
+                if (value == null)
+                {
+                    _cacheReference = null;
+                    return;
+                }
+                if (_cacheReference == null)
+                    _cacheReference = new WeakReference(value);
+                else
+                    _cacheReference.Target = value;
+            }
+        }
+
         /// <summary>
         /// Only inherited models can call parameter-less constructor and it is their responsibility to 
         /// call Init() as the very first thing.
@@ -58,6 +81,8 @@ namespace Xbim.IO.LiteDb
             _header = header;
         }
 
+        private XbimInstanceCollection InstancesLocal { get; set; }
+
         public LiteDbModel(IEntityFactory factory)
         {
             Init(factory);
@@ -67,7 +92,7 @@ namespace Xbim.IO.LiteDb
         {
             _factory = factory;
             InstanceCache = new PersistedEntityInstanceCache(this, factory);
-           // InstancesLocal = new XbimInstanceCollection(this);
+            InstancesLocal = new XbimInstanceCollection(this);
             var r = new Random();
             UserDefinedId = (short)r.Next(short.MaxValue); // initialise value at random to reduce chance of duplicates
             Metadata = ExpressMetaData.GetMetadata(factory.GetType().Module);
